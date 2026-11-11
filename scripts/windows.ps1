@@ -63,6 +63,7 @@ if ($Action -eq 'stop') {
 }
 
 if ($Action -eq 'install') {
+    if (Get-AppProcess) { throw 'Stop the running app with stop.bat before reinstalling dependencies.' }
     Install-OptionalTool 'node.exe' 'OpenJS.NodeJS.LTS' 'Required to run the application.'
     Assert-Toolchain
     Install-OptionalTool 'ffmpeg.exe' 'Gyan.FFmpeg' 'Needed for audio chunking and video frames; text import works without it.'
@@ -77,8 +78,11 @@ if ($Action -eq 'install') {
 Assert-Toolchain
 $RunningApp = Get-AppProcess
 if ($RunningApp) {
-    Write-Host "Application is already running at $AppUrl"
-    Start-Process $AppUrl
+    $RunningRecord = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
+    $RunningPort = if ($RunningRecord.port) { [int]$RunningRecord.port } else { $AppPort }
+    $RunningUrl = "http://127.0.0.1:$RunningPort"
+    Write-Host "Application is already running at $RunningUrl"
+    Start-Process $RunningUrl
     exit 0
 }
 if (-not (Test-Path (Join-Path $ProjectRoot 'node_modules\tsx'))) { throw 'Dependencies are missing. Run install.bat first.' }
@@ -101,7 +105,7 @@ $ServerProcess = Start-Process -FilePath (Get-Command node.exe).Source `
     -RedirectStandardOutput (Join-Path $AppDataDirectory 'logs\server.log') `
     -RedirectStandardError (Join-Path $AppDataDirectory 'logs\server-error.log')
 $StartedAt = $ServerProcess.StartTime.ToUniversalTime().ToString('o')
-@{ processId = $ServerProcess.Id; entry = $ServerEntry; startedAt = $StartedAt } | ConvertTo-Json | Set-Content -LiteralPath $PidFile
+@{ processId = $ServerProcess.Id; entry = $ServerEntry; startedAt = $StartedAt; port = $AppPort } | ConvertTo-Json | Set-Content -LiteralPath $PidFile
 $Ready = $false
 for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
     $ServerProcess.Refresh()
