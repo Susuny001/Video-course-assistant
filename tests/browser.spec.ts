@@ -47,6 +47,9 @@ test('imports a transcript, extracts editable keywords, scopes local cited Q&A a
   await page.getByRole('button', { name: '课程大纲', exact: true }).click();
   await importCourse(page, '浏览器验证 · 计算机绘图', [markdownPath]);
   await expect(page.locator('.chapter-title')).toHaveCount(2);
+  await page.locator('.source-documents button').click();
+  await expect(page.getByRole('dialog', {name:'原始资料',exact:true})).toContainText('断面图只画切断面');
+  await page.getByRole('button',{name:'关闭原始资料',exact:true}).click();
   await expect(page.locator('.course-heading')).toContainText('时间为文字估算');
   await page.getByRole('button', { name: '我的重点', exact: true }).click();
   await page.getByLabel('我想重点关注').fill('开卷');
@@ -97,6 +100,10 @@ test('plays an imported real audio file, seeks, changes speed and keeps exact SR
   await page.getByRole('checkbox', { name: '选择字幕 00:00', exact: true }).check();
   await page.getByRole('checkbox', { name: '选择字幕 00:03', exact: true }).check();
   await expect(page.locator('.selection-bar')).toContainText('00:00 — 00:08');
+  await page.getByLabel('选段开始时间', {exact:true}).fill('00:01');
+  await page.getByLabel('选段结束时间', {exact:true}).fill('00:06');
+  await page.getByRole('button', { name: '定位选段', exact: true }).click();
+  await expect(page.locator('.selection-bar')).toContainText('00:01 — 00:06');
   await page.getByRole('button', { name: '循环选段', exact: true }).click();
   await expect(page.getByRole('button', { name: '循环选段', exact: true })).toHaveClass(/selected/);
 });
@@ -133,9 +140,9 @@ test('mobile workspace keeps content within the viewport and can navigate librar
   await page.getByRole('button', { name: '补充资料', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '导入课程资料' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: '/workspace/scratch/course-mobile-import.png', fullPage: false });
+  await page.screenshot({ path: test.info().outputPath('course-mobile-import.png'), fullPage: false });
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click();
   await page.setViewportSize({ width: 375, height: 812 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
-  await page.screenshot({ path: '/workspace/scratch/course-mobile.png', fullPage: true });
+  await page.screenshot({ path: test.info().outputPath('course-mobile.png'), fullPage: true });
 });
