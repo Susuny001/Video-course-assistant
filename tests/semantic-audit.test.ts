@@ -94,3 +94,25 @@ test("background nonsense and suspected terminology are flagged without overwrit
   assert.ok(findings.some((f) => f.message.includes("向视图")));
   assert.deepEqual(c, original);
 });
+test("generated notices cannot reverse negative exam arrangements or open-book requirements", () => {
+  const course = lecture(["没有期中考试，期末考试开卷。"]);
+  const report = {title: "课", generatedAt: "", method: "model-assisted", keywords: [], sections: [], warnings: [], markdown: "", notices: [{category: "exam", text: "期中考试和期末考试均为闭卷。", cueIds: ["s0"], start: 0, end: 30}]} as StudyReport;
+  const audit = semanticAudit(course, report);
+  assert.ok(audit.some((item) => item.message.includes("遗漏") && item.message.includes("期中")));
+  assert.ok(audit.some((item) => item.message.includes("闭卷") && item.message.includes("相反")));
+  report.notices[0].text = "没有期中考试，期末考试开卷。";
+  assert.ok(!semanticAudit(course, report).some((item) => item.message.startsWith("整理后的")));
+});
+test("generated notices retain the lecturer's uncertainty about drawing and assignment constraints", () => {
+  const course = lecture(["大概率不会让大家手画非常复杂的图。", "作业3-8和3-9不用做，建议先完成其他题。"]);
+  const report = {title: "课", generatedAt: "", method: "model-assisted", keywords: [], sections: [], warnings: [], markdown: "", notices: [
+    {category: "exam", text: "不会让大家手画非常复杂的图。", cueIds: ["s0"], start: 0, end: 30},
+    {category: "assignment", text: "作业必须完成3-8和3-9及其他题。", cueIds: ["s1"], start: 30, end: 60},
+  ]} as StudyReport;
+  const audit = semanticAudit(course, report);
+  assert.ok(audit.some((item) => item.cueIds.includes("s0") && item.message.includes("大概率不会")));
+  assert.ok(audit.some((item) => item.cueIds.includes("s1") && item.message.includes("免做")));
+  report.notices[0].text = "大概率不会让大家手画非常复杂的图。";
+  report.notices[1].text = "3-8和3-9不用做，建议先完成其他题。";
+  assert.ok(!semanticAudit(course, report).some((item) => item.message.startsWith("整理后的")));
+});

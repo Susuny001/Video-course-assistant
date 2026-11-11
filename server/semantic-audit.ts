@@ -202,6 +202,25 @@ export function semanticAudit(
             "整理后的考试否定结论缺少相应原句支持，应退回复核，禁止仅凭常识补写。",
           ),
         );
+      const compact = (value: string) => value.replace(/[，。啊呃\s]/g, "");
+      for (const period of ["期中", "期末"]) {
+        const denied = new RegExp("(?:没有|取消|不设|不考|无).{0,3}" + period);
+        if (denied.test(compact(evidence)) && claim.includes(period) && !denied.test(compact(claim)))
+          out.push(finding(sources, "report-lost-negation:" + period,
+            `整理后的通知遗漏来源中对${period}考试的否定约束，应缩小来源重新整理，不能把“没有考试”改成肯定安排。`));
+      }
+      for (const [actual, opposite] of [["开卷", "闭卷"], ["闭卷", "开卷"]])
+        if (evidence.includes(actual) && !evidence.includes(opposite) && claim.includes(opposite))
+          out.push(finding(sources, "report-exam-format:" + opposite,
+            `整理后的考试方式“${opposite}”与来源“${actual}”相反，不能以有效引用代替内容核实。`));
+      if (fact.category === "assignment" && /(?:不用|不必|不要|不做|无需).{0,8}(?:做|写|完成|题|\d)/.test(evidence) &&
+          !/(?:不用|不必|不要|不做|无需|排除|除外)/.test(claim))
+        out.push(finding(sources, "report-assignment-negation",
+          "整理后的作业通知遗漏来源中的免做或排除约束，应回到对应原句重新整理。"));
+      const tentative = /大概率|可能|也许|或许|估计|一般(?:情况)?|建议|尽量|大概/;
+      if (tentative.test(evidence) && !tentative.test(claim) && /不会|必须|禁止|一定|肯定|绝对|不得|不允许|不能/.test(claim))
+        out.push(finding(sources, "report-strengthened-modality",
+          "整理后的通知疑似删去来源中的概率、可能或建议语气，并改成绝对要求或保证。应保留讲者的限定，不能把“大概率不会”写成“不会”。"));
     }
   }
   return out;
