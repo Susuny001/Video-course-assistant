@@ -80,13 +80,15 @@ export function semanticAudit(
   );
   for (const cue of noFinal)
     if (finalEvidence.length)
-      out.push(
-        finding(
+      out.push({
+        ...finding(
           [cue, ...finalEvidence.slice(0, 2)],
           "exam-contradiction",
           "“没有期末考试”与同堂课的期末/笔试安排冲突。可能是口误或共同误识，须对原音频重新识别，不能直接照抄任一说法。",
         ),
-      );
+        start: cue.start,
+        end: cue.end,
+      });
   for (const [index, cue] of cues.entries()) {
     const text = body(cue);
     const context = [cues[index - 1], cue, cues[index + 1]]

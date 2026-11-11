@@ -168,6 +168,7 @@ export async function runLocalRecognition(
     start?: number;
     end?: number;
     onProgress?: (s: string) => void;
+    evidenceOnly?: boolean;
   },
 ): Promise<Course> {
   const ready = await localAsrStatus();
@@ -252,11 +253,12 @@ export async function runLocalRecognition(
     });
     const result: LocalAsrResult = JSON.parse(await readFile(output, "utf8"));
     const updated = applyLocalRecognition(
-      course,
+      options.evidenceOnly ? { ...course, cues: [], chapters: [] } : course,
       result,
       options.start,
       options.end,
     );
+    if (options.evidenceOnly) return updated;
     updated.documents.push({
       id: randomUUID(),
       name: "本地语音识别记录.json",

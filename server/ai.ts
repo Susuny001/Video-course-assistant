@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { EnvHttpProxyAgent } from 'undici';
+import {localAsrStatus,runLocalRecognition} from './local-asr.ts';
 import type { ChatMessage, ChatResult, Course, Cue, ProviderSettings } from '../src/types.js';
 
 const exec = promisify(execFile);
@@ -272,6 +273,8 @@ async function transcribe(course: Course, settings: ProviderSettings, options: J
 }
 async function independentSpeech(course: Course, settings: ProviderSettings, options: JobOptions) {
   options.onProgress?.(course.media?.type.startsWith('video/') ? '重新识别选段音频，随后结合视频采样帧核对' : '重新识别选段录音，随后与原稿核对');
+  const local=settings.speechEngine==='local'||/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/)/i.test(settings.baseUrl);
+  if(local){const status=await localAsrStatus();if(!status.ready)throw new ProviderError(status.message,400);const evidence=await runLocalRecognition(course,{mediaPath:options.mediaPath,start:options.start,end:options.end,onProgress:options.onProgress,evidenceOnly:true});return evidence.cues;}
   const ids = new Set(course.cues.map(c => c.id));
   const checked = await transcribe(structuredClone(course),settings,{...options,type:'transcribe'},false);
   return checked.cues.filter(c => !ids.has(c.id));

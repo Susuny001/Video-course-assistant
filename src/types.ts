@@ -49,6 +49,7 @@ export interface ProviderSettings {
   hasApiKey?: boolean;
   model: string;
   speechModel: string;
+  speechEngine?: "local" | "api";
   language: string;
   terminologyOnly: boolean;
   reasoningEffort: "none" | "low" | "medium" | "high";

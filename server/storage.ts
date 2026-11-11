@@ -5,7 +5,7 @@ import type { Course, ProviderSettings } from '../src/types.ts';
 export const dataDir=path.resolve(process.env.DATA_DIR || 'data');
 export const mediaDir=path.join(dataDir,'media');
 const courseDir=path.join(dataDir,'courses');
-export const defaultSettings: ProviderSettings={baseUrl:'',model:'',speechModel:'whisper-1',language:'en',terminologyOnly:false,reasoningEffort:'none'};
+export const defaultSettings: ProviderSettings={baseUrl:'',model:'',speechModel:'whisper-1',speechEngine:'local',language:'en',terminologyOnly:false,reasoningEffort:'none'};
 export async function initializeStorage(){ await fs.mkdir(courseDir,{recursive:true}); await fs.mkdir(mediaDir,{recursive:true}); }
 function coursePath(id:string){if(!/^[\w-]{1,100}$/.test(id)) throw Object.assign(new Error('课程不存在。'),{status:404}); return path.join(courseDir,`${id}.json`);}
 async function writeAtomic(filename:string,value:unknown){const temp=`${filename}.${randomUUID()}.tmp`;try {await fs.writeFile(temp,JSON.stringify(value,null,2),{mode:0o600});await fs.rename(temp,filename);} finally {await fs.rm(temp,{force:true});}}
