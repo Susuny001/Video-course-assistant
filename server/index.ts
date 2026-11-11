@@ -12,6 +12,8 @@ import { parsePptx } from './documents.ts';
 import { parseTranscript, normalizeKeywords, retimeEstimated, extractHighlights, localChat, exportCourse, selectCues } from './processing.ts';
 import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured, ProviderError, listProviderModels } from './ai.ts';
 
+import {localAsrStatus,runLocalRecognition} from './local-asr.ts';
+
 const execFileAsync=promisify(execFile);
 const mediaExtensions=new Set(['.mp3','.wav','.m4a','.ogg','.mp4','.webm','.mov']);
 const docExtensions=new Set(['.md','.txt','.srt','.vtt','.pdf','.pptx']);
@@ -75,6 +77,7 @@ function unlocked(id:string){if(activeJobs.has(id))throw error(409,'课程正在
 function numeric(value:unknown):number|undefined{if(value===undefined||value===null||value==='')return undefined;if(typeof value!=='number'||!Number.isFinite(value))throw error(400,'时间必须是有效的秒数。');return value;}
 function mediaPath(course:Course){return course.media?path.join(mediaDir,path.basename(course.media.url)):undefined;}
 
+app.get('/api/local-asr',route(async(_req,res)=>res.json(await localAsrStatus())));
 app.get('/api/health',(_req,res)=>res.json({ok:true,service:'video-course-assistant'}));
 app.get('/api/courses',route(async(_req,res)=>res.json(await listCourses())));
 app.post('/api/courses',route(async(req,res)=>{
@@ -133,13 +136,16 @@ app.get('/api/models',route(async(_req,res)=>res.json({models:await listProvider
 app.post('/api/courses/:id/jobs',route(async(req,res)=>{
   const course=await getCourse(idParam(req));unlocked(course.id);const type=req.body.type;
   if(!['transcribe','translate','correct','summarize'].includes(type))throw error(400,'不支持的处理任务。');
-  const settings=await getSettings();if(!isProviderConfigured(settings))throw error(400,'请先在模型设置中连接 AI。');
+  const settings=await getSettings();
+  const local=type==='transcribe'&&(req.body.engine==='local'||!isProviderConfigured(settings));
+  if(local){const status=await localAsrStatus();if(!status.ready)throw error(400,status.message);}
+  else if(!isProviderConfigured(settings))throw error(400,'请先在模型设置中连接 AI；语音转录也可使用本地识别，无需 API Key。');
   const start=numeric(req.body.start),end=numeric(req.body.end);selectCues(course,start,end);
   const job:Job={id:randomUUID(),courseId:course.id,type,status:'queued',progress:'等待处理',createdAt:new Date().toISOString()};jobs.set(job.id,job);activeJobs.add(course.id);
   // Keep bounded terminal job history; active jobs are never evicted.
   if(jobs.size>500)for(const [id,j]of jobs){if(j.status==='done'||j.status==='error'){jobs.delete(id);if(jobs.size<=400)break;}}
   res.status(202).json(job);
-  void (async()=>{try{job.status='running';job.progress='正在处理';const updated=await runCourseJob(course,settings,{type,start,end,mediaPath:mediaPath(course),onProgress:(message:string)=>{job.progress=message;}});await saveCourse(updated);job.status='done';job.progress='处理完成';}catch(e){job.status='error';job.error=(e as Error).message||'任务失败，请检查模型配置。';job.progress='处理失败';}finally{activeJobs.delete(course.id);}})();
+  void (async()=>{try{job.status='running';job.progress='正在处理';const options={type,start,end,mediaPath:mediaPath(course),onProgress:(message:string)=>{job.progress=message;}};const updated=local?await runLocalRecognition(course,options):await runCourseJob(course,settings,options);await saveCourse(updated);job.status='done';job.progress='处理完成';}catch(e){job.status='error';job.error=(e as Error).message||'任务失败，请检查模型配置。';job.progress='处理失败';}finally{activeJobs.delete(course.id);}})();
 }));
 app.get('/api/jobs/:id',(req,res)=>{const job=jobs.get(idParam(req));if(!job)return res.status(404).json({error:'任务不存在或服务已重启，请刷新课程查看已保存结果。'});res.json(job);});
 app.use('/api',(_req,res)=>res.status(404).json({error:'接口不存在。'}));

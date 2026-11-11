@@ -115,6 +115,10 @@ function App() {
     [range, setRange] = useState<[number, number] | null>(null),
     [repeat, setRepeat] = useState(false),
     [rate, setRate] = useState("1");
+  const [localSpeech, setLocalSpeech] = useState<{
+    ready: boolean;
+    message: string;
+  }>({ ready: false, message: "" });
   const [appendImport, setAppendImport] = useState(false);
   const [subtitleUrl, setSubtitleUrl] = useState("");
   const [documentId, setDocumentId] = useState<string | null>(null);
@@ -193,6 +197,9 @@ function App() {
   useEffect(() => {
     Promise.all([
       refresh(),
+      api<{ ready: boolean; message: string }>("/local-asr")
+        .then(setLocalSpeech)
+        .catch(() => {}),
       api<ProviderSettings>("/settings").then((s) =>
         setSettings({ ...initialSettings, ...s }),
       ),
@@ -365,7 +372,13 @@ function App() {
     try {
       const j = await api<Job>(
         "/courses/" + course.id + "/jobs",
-        json({ type, ...(range ? { start: range[0], end: range[1] } : {}) }),
+        json({
+          type,
+          ...(type === "transcribe" && localSpeech.ready
+            ? { engine: "local" }
+            : {}),
+          ...(range ? { start: range[0], end: range[1] } : {}),
+        }),
       );
       setJob(j);
     } catch (e) {
@@ -935,12 +948,16 @@ function App() {
                     </label>
                     <div>
                       <button
-                        title="从录音生成真实时间字幕"
+                        title={
+                          localSpeech.ready
+                            ? "无需 API Key，本机识别录音并生成时间字幕"
+                            : "从录音生成真实时间字幕"
+                        }
                         disabled={jobBusy || !course.media}
                         onClick={() => startJob("transcribe")}
                       >
                         <Headphones size={14} />
-                        转录
+                        {localSpeech.ready ? "本地转录" : "转录"}
                       </button>
                       <button
                         disabled={jobBusy || !course.cues.length}
@@ -1957,7 +1974,7 @@ function ImportDialog({
       </details>
       <div className="notice">
         <FileText size={15} />
-        文字稿可直接使用。音视频自动转录需先配置模型，原始录音会保留。
+        文字稿可直接使用。音视频转录可使用已安装的本地识别，或连接语音模型接口；原始录音会保留。
       </div>
       <button
         className="button primary full"
