@@ -4,11 +4,18 @@ import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { EnvHttpProxyAgent } from 'undici';
 import type { ChatMessage, ChatResult, Course, Cue, ProviderSettings } from '../src/types.js';
 
 const exec = promisify(execFile);
 const MAX_CONTEXT = 42000;
 const MAX_AUDIO_SECONDS = 4 * 3600;
+let environmentProxy: EnvHttpProxyAgent | undefined;
+function proxyDispatcher() {
+  if (!process.env.HTTP_PROXY && !process.env.HTTPS_PROXY && !process.env.http_proxy && !process.env.https_proxy) return undefined;
+  // Honor inherited proxy/NO_PROXY routing. Default TLS verification and NODE_EXTRA_CA_CERTS stay enabled.
+  return environmentProxy ??= new EnvHttpProxyAgent();
+}
 export class ProviderError extends Error {
   constructor(message: string, public status = 502) { super(message); this.name = 'ProviderError'; }
 }
@@ -30,7 +37,11 @@ function headers(settings: ProviderSettings, json = true) {
 }
 async function request(settings: ProviderSettings, path: string, options: RequestInit, timeout = 180000): Promise<unknown> {
   let response: Response;
-  try { response = await fetch(endpoint(settings, path), { ...options, signal: AbortSignal.timeout(timeout) }); }
+  try {
+    const dispatcher = proxyDispatcher();
+    const requestOptions = { ...options, signal: AbortSignal.timeout(timeout), ...(dispatcher ? {dispatcher} : {}) };
+    response = await fetch(endpoint(settings, path),requestOptions);
+  }
   catch (error) {
     if (error instanceof ProviderError) throw error;
     throw new ProviderError('无法连接模型服务或请求超时。请检查 API 地址、网络权限和服务状态。');

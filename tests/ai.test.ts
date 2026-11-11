@@ -199,3 +199,18 @@ test('audio-only correction uses independent speech recognition without pretendi
     await assert.rejects(chatWithCourse(input,settings,{question:'说明图形',useVision:true,mediaPath:path}),/视觉分析需要上传视频/);
   } finally { await rm(directory,{recursive:true,force:true}); }
 });
+
+test('provider request honors inherited environment proxy routing without overriding TLS verification', async () => {
+  const previous = process.env.HTTPS_PROXY;
+  process.env.HTTPS_PROXY = 'http://127.0.0.1:3999';
+  try {
+    globalThis.fetch = async (_input,init) => {
+      const dispatcher = (init as RequestInit & {dispatcher?:{dispatch?:unknown}}).dispatcher;
+      assert.equal(typeof dispatcher?.dispatch,'function');
+      return Response.json({data:[{id:'study-model'}]});
+    };
+    assert.equal((await testProvider(settings)).ok,true);
+  } finally {
+    if (previous === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previous;
+  }
+});
