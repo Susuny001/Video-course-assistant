@@ -1,3 +1,4 @@
+import {layoutCaptions,INTERPOLATED_CAPTION_NOTE} from '../src/caption-layout.ts';
 import { randomUUID } from 'node:crypto';
 import type { Course, Cue, Chapter, Highlight, ChatResult } from '../src/types.ts';
 
@@ -151,11 +152,15 @@ export function formatTime(seconds: number, separator = ','): string {
   const ms = Math.round(Math.max(0,seconds)*1000);
   return `${String(Math.floor(ms/3600000)).padStart(2,'0')}:${String(Math.floor(ms/60000)%60).padStart(2,'0')}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}${separator}${String(ms%1000).padStart(3,'0')}`;
 }
-export function exportCourse(course: Course, format: string, keywords: string[] = []): {body:string;mime:string;extension:string} {
+export function exportCourse(course: Course, format: string, keywords: string[] = []): {body:string;mime:string;extension:string;timingHint?:string} {
   if (format==='json') return {body:JSON.stringify(course,null,2),mime:'application/json',extension:'json'};
   if (format==='srt' || format==='vtt') {
-    const header=format==='vtt'?`WEBVTT\n\nNOTE ${course.timing==='estimated'?'时间为估算，未与录音对齐':'已导入时间轴'}\n\n`:'';
-    return {body:header+course.cues.map((c,i)=>`${i+1}\n${formatTime(c.start,format==='vtt'?'.':',')} --> ${formatTime(c.end,format==='vtt'?'.':',')}\n${c.correctedText||c.text}${c.translation?'\n'+c.translation:''}\n`).join('\n'),mime:format==='vtt'?'text/vtt':'application/x-subrip',extension:format};
+    const captions=layoutCaptions(course.cues.map(c=>({...c,text:c.correctedText||c.text})),'bilingual');
+    const interpolated=captions.some(c=>c.timing==='interpolated');
+    const timingHint=interpolated?'interpolated-within-source-segment':course.timing==='estimated'?'estimated':'source-segment';
+    const header=format==='vtt'?`WEBVTT\n\nNOTE ${course.timing==='estimated'?'时间为估算，未与录音对齐':'保留原始时间轴边界'}${interpolated?'；'+INTERPOLATED_CAPTION_NOTE:''}\n\n`:'';
+    const escape=(s:string)=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return {body:header+captions.map((c,i)=>`${i+1}\n${formatTime(c.start,format==='vtt'?'.':',')} --> ${formatTime(c.end,format==='vtt'?'.':',')}\n${c.lines.map(escape).join('\n')}\n`).join('\n'),mime:format==='vtt'?'text/vtt':'application/x-subrip',extension:format,timingHint};
   }
   if (format!=='md') throw Object.assign(new Error('不支持的导出格式。'),{status:400});
   const highlight=extractHighlights(course,keywords.length?keywords:course.keywords);
