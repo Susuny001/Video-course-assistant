@@ -34,3 +34,7 @@ test('exports preserve corrections and translations without losing original JSON
 test('local answers cite retrieved text and do not invent answers when no match exists',()=>{
  const c=build('## 考试\n期末考试开卷，两小时。');const answer=localChat(c,'考试是什么形式？');assert.equal(answer.mode,'local');assert.equal(answer.sources.length,1);assert.match(answer.answer,/本地检索/);assert.equal(localChat(c,'光合作用').sources.length,0);
 });
+test('Markdown export retains verbatim imported sources separately from corrected subtitles',()=>{
+ const c=build('原始术语。');c.cues[0].correctedText='修订术语。';c.documents=[{id:'source',name:'课程.md',type:'md',text:'## 原标题\n原始术语。\n```code```'}];
+ const output=exportCourse(c,'md').body;assert.match(output,/修订术语/);assert.match(output,/导入文档原稿（逐字保留）/);assert.ok(output.includes(c.documents[0].text));assert.match(output,/````text/);
+});

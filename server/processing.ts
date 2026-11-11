@@ -142,5 +142,11 @@ export function exportCourse(course: Course, format: string, keywords: string[] 
   if (format!=='md') throw Object.assign(new Error('不支持的导出格式。'),{status:400});
   const highlight=extractHighlights(course,keywords.length?keywords:course.keywords);
   const parts=[`# ${course.title}`,`时间轴：${course.timing==='estimated'?'估算，未经音视频对齐':course.timing==='exact'?'来自带时间戳字幕 / 语音转录':'无时间轴'}`,'## 章节摘要（本地摘要为原文摘录）',...course.chapters.map(ch=>`### ${ch.title}\n${formatTime(ch.start,'.')} — ${formatTime(ch.end,'.')}\n\n${ch.summary}`),'## 指定关键词重点',...(highlight.length?highlight.map(h=>`### ${h.keyword} · ${formatTime(h.start,'.')}\n\n${h.excerpt}`):['暂无匹配。']),'## 字幕',...course.cues.map(c=>`[${formatTime(c.start,'.')}] ${c.correctedText||c.text}${c.translation?'\n\n'+c.translation:''}`)];
+  parts.push('## 导入文档原稿（逐字保留）');
+  for (const doc of course.documents) {
+    const longest = Math.max(0, ...(doc.text.match(/`+/g) || []).map(v => v.length));
+    const fence = '`'.repeat(Math.max(3, longest + 1));
+    parts.push(`### ${doc.name.replace(/[\r\n]/g, ' ')}\n\n${fence}text\n${doc.text}\n${fence}`);
+  }
   return {body:parts.join('\n\n'),mime:'text/markdown',extension:'md'};
 }

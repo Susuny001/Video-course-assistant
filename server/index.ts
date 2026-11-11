@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import type { Course, CourseDocument, Job, ProviderSettings } from '../src/types.ts';
 import { dataDir, mediaDir, initializeStorage, listCourses, getCourse, saveCourse, removeCourse, getSettings, saveSettings, publicSettings } from './storage.ts';
+import { parsePptx } from './documents.ts';
 import { parseTranscript, normalizeKeywords, retimeEstimated, extractHighlights, localChat, exportCourse, selectCues } from './processing.ts';
 import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured } from './ai.ts';
 
@@ -33,7 +34,6 @@ function uploaded(req:express.Request){return (req.files as Express.Multer.File[
 function uploadRequest(req:express.Request,res:express.Response):Promise<void>{return new Promise((resolve,reject)=>upload(req,res,err=>err?reject(err):resolve()));}
 async function cleanup(files:Express.Multer.File[]){await Promise.all(files.map(file=>fs.rm(file.path,{force:true})));}
 function originalName(value:string){const name=Buffer.from(value,'latin1').toString('utf8');return !name.includes('\uFFFD')?name:value;}
-const xmlDecode=(v:string)=>v.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');
 async function documentText(file:Express.Multer.File){
   if(file.size>10*1024*1024)throw error(413,'文字稿或演示文稿请控制在 10 MiB 内，音视频最大支持 1 GiB。');
   const ext=path.extname(file.originalname).toLowerCase();
@@ -42,20 +42,7 @@ async function documentText(file:Express.Multer.File){
     try {const result=await pdf(await fs.readFile(file.path));if(!result.text.trim())throw error(422,'PDF 没有可提取的文字，扫描件请先 OCR 或导出文字稿。');return result.text;}
     catch(e){if((e as {status?:number}).status)throw e;throw error(422,'PDF 解析失败，请导出为 TXT 或 Markdown 后重试。');}
   }
-  if(ext==='.pptx'){
-    try {
-      const {stdout:list}=await execFileAsync('unzip',['-Z1',file.path],{timeout:10000,maxBuffer:1024*1024});
-      const slides=list.split('\n').filter(n=>/^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a,b)=>Number(a.match(/slide(\d+)/)![1])-Number(b.match(/slide(\d+)/)![1]));
-      if(slides.length>500)throw error(413,'PPTX 超过 500 页，请拆分上传。');
-      const texts=[];
-      for(const [i,slide]of slides.entries()){
-        const {stdout:xml}=await execFileAsync('unzip',['-p',file.path,slide],{timeout:10000,maxBuffer:2*1024*1024});
-        texts.push(`## 第 ${i+1} 页\n`+[...xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)].map(m=>xmlDecode(m[1])).join('\n'));
-      }
-      if(!texts.length)throw error(422,'PPTX 中没有可提取的文字；图片内容需要视觉模型处理。');
-      return texts.join('\n\n');
-    }catch(e){if((e as {status?:number}).status)throw e;throw error(422,'PPTX 解析失败或缺少 unzip，请导出 PDF / TXT 后导入。');}
-  }
+  if(ext==='.pptx')return parsePptx(await fs.readFile(file.path));
   return fs.readFile(file.path,'utf8');
 }
 async function addFiles(course:Course,files:Express.Multer.File[],transcript?:string){
@@ -164,7 +151,7 @@ app.use((err:Error & {status?:number;statusCode?:number;code?:string},_req:expre
   if(status>=500)console.error(`[api] ${err.name}: ${err.message.replace(/(?:Bearer\s+|sk-)[\w-]+/gi,'[redacted]')}`);
 });
 // Keep demonstration material separate from user uploads, and never reseed a nonempty library.
-if(!(await listCourses()).length){try{const text=await fs.readFile(path.join(projectRoot,'examples/course.md'),'utf8');const now=new Date().toISOString();await saveCourse({id:randomUUID(),title:'计算机绘图 · 剖视图与断面图',createdAt:now,updatedAt:now,documents:[{id:randomUUID(),name:'示例课程节选.md',type:'md',text}],...parseTranscript(text,'示例课程节选.md'),language:'zh',keywords:['考试','作业','剖视图']});}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
+if(!(await listCourses()).length){try{const text=await fs.readFile(path.join(projectRoot,'examples/course.md'),'utf8');const now=new Date().toISOString();await saveCourse({id:randomUUID(),title:'计算机绘图 · 剖视图与断面图',createdAt:now,updatedAt:now,documents:[{id:randomUUID(),name:'示例课程节选.md',type:'md',text}],...parseTranscript(text,'示例课程节选.md'),language:'zh',keywords:['作业','大作业','期末','开卷','下节课','提醒']});}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
 const port=Number(process.env.PORT||3001),host=process.env.HOST||'127.0.0.1';
 app.listen(port,host,()=>console.log(`Course assistant API listening on ${host}:${port}; data: ${path.basename(dataDir)}`));
 export { app };
