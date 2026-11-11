@@ -10,7 +10,7 @@ import type { Course, CourseDocument, Job, ProviderSettings } from '../src/types
 import { dataDir, mediaDir, initializeStorage, listCourses, getCourse, saveCourse, removeCourse, getSettings, saveSettings, publicSettings } from './storage.ts';
 import { parsePptx } from './documents.ts';
 import { parseTranscript, normalizeKeywords, retimeEstimated, extractHighlights, localChat, exportCourse, selectCues } from './processing.ts';
-import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured } from './ai.ts';
+import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured, ProviderError } from './ai.ts';
 
 const execFileAsync=promisify(execFile);
 const mediaExtensions=new Set(['.mp3','.wav','.m4a','.ogg','.mp4','.webm','.mov']);
@@ -147,7 +147,7 @@ const dist=path.join(projectRoot,'dist');
 try {await fs.access(path.join(dist,'index.html'));app.use(express.static(dist));app.get('/{*path}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));}catch{/* Vite handles the development frontend. */}
 app.use((err:Error & {status?:number;statusCode?:number;code?:string},_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
   const status=err instanceof multer.MulterError?(err.code==='LIMIT_FILE_SIZE'?413:400):(err.status||err.statusCode||500);
-  res.status(status>=400&&status<600?status:500).json({error:err instanceof multer.MulterError?(err.code==='LIMIT_FILE_SIZE'?'文件超过 1 GiB 上传限制。':'上传文件数量或字段超过限制。'):status<500?err.message:'服务处理失败，请检查终端日志或模型连接。'});
+  res.status(status>=400&&status<600?status:500).json({error:err instanceof multer.MulterError?(err.code==='LIMIT_FILE_SIZE'?'文件超过 1 GiB 上传限制。':'上传文件数量或字段超过限制。'):status<500||err instanceof ProviderError?err.message:'服务处理失败，请检查终端日志或模型连接。'});
   if(status>=500)console.error(`[api] ${err.name}: ${err.message.replace(/(?:Bearer\s+|sk-)[\w-]+/gi,'[redacted]')}`);
 });
 // Keep demonstration material separate from user uploads, and never reseed a nonempty library.
