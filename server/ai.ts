@@ -49,7 +49,7 @@ async function completion(settings: ProviderSettings, userContent: unknown, syst
   if (!settings.model?.trim()) throw new ProviderError('请先在模型设置中填写模型名称。', 400);
   const body = {
     model: settings.model,
-    messages: [{role: 'system', content: SYSTEM + '\n' + system}, ...history.slice(-6).map(message => ({role: message.role, content: message.content.slice(0, 4000)})), {role: 'user', content: userContent}],
+    messages: [{role: 'system', content: SYSTEM + '\n' + system}, ...history.filter(message => (message?.role === 'user' || message?.role === 'assistant') && typeof message.content === 'string').slice(-6).map(message => ({role: message.role, content: message.content.slice(0, 4000)})), {role: 'user', content: userContent}],
     ...(settings.reasoningEffort && settings.reasoningEffort !== 'none' ? {reasoning_effort: settings.reasoningEffort} : {}),
   };
   const data = await request(settings, 'chat/completions', {method: 'POST', headers: headers(settings), body: JSON.stringify(body)}) as {choices?:{message?:{content?:unknown}}[]};
