@@ -10,7 +10,7 @@ import type { Course, CourseDocument, Job, ProviderSettings } from '../src/types
 import { dataDir, mediaDir, initializeStorage, listCourses, getCourse, saveCourse, removeCourse, getSettings, saveSettings, publicSettings } from './storage.ts';
 import { parsePptx } from './documents.ts';
 import { parseTranscript, normalizeKeywords, retimeEstimated, extractHighlights, localChat, exportCourse, selectCues } from './processing.ts';
-import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured, ProviderError } from './ai.ts';
+import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured, ProviderError, listProviderModels } from './ai.ts';
 
 const execFileAsync=promisify(execFile);
 const mediaExtensions=new Set(['.mp3','.wav','.m4a','.ogg','.mp4','.webm','.mov']);
@@ -129,6 +129,7 @@ app.put('/api/settings',route(async(req,res)=>{
   await saveSettings(settings);res.json(publicSettings(settings));
 }));
 app.post('/api/settings/test',route(async(_req,res)=>res.json(await testProvider(await getSettings()))));
+app.get('/api/models',route(async(_req,res)=>res.json({models:await listProviderModels(await getSettings())})));
 app.post('/api/courses/:id/jobs',route(async(req,res)=>{
   const course=await getCourse(idParam(req));unlocked(course.id);const type=req.body.type;
   if(!['transcribe','translate','correct','summarize'].includes(type))throw error(400,'不支持的处理任务。');

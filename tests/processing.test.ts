@@ -14,9 +14,9 @@ test('SRT and WebVTT preserve real timestamps and multiline text',()=>{
  const v=build('WEBVTT\n\n00:01.000 --> 00:03.000 align:start\n字幕\n','x.vtt');assert.equal(v.cues[0].start,1);
  assert.throws(()=>parseTranscript('bad subtitles','bad.srt'),/有效时间轴/);
 });
-test('keywords are literal case-insensitive matches, grouped only across adjacent cues in one chapter',()=>{
+test('keyword context is literal, case-insensitive, merged and bounded to one chapter',()=>{
  const c=build('## 单元一\nAutoCAD 可以复制。CAD 可以裁剪。其他内容。CAD 是绘图软件。\n## 单元二\nCAD 作业。');
- const h=extractHighlights(c,['cad','[.*]']);assert.equal(h.length,3);assert.equal(h[0].cueIds.length,2);assert.match(h[0].excerpt,/AutoCAD/);assert.equal(h[2].chapterId,c.chapters[1].id);
+ const h=extractHighlights(c,['cad','[.*]']);assert.equal(h.length,2);assert.equal(h[0].cueIds.length,4);assert.match(h[0].excerpt,/AutoCAD/);assert.equal(h[1].chapterId,c.chapters[1].id);
  assert.equal(extractHighlights(c,['不存在']).length,0);
 });
 test('range uses overlap boundaries and rejects invalid ranges',()=>{
@@ -37,4 +37,13 @@ test('local answers cite retrieved text and do not invent answers when no match 
 test('Markdown export retains verbatim imported sources separately from corrected subtitles',()=>{
  const c=build('原始术语。');c.cues[0].correctedText='修订术语。';c.documents=[{id:'source',name:'课程.md',type:'md',text:'## 原标题\n原始术语。\n```code```'}];
  const output=exportCourse(c,'md').body;assert.match(output,/修订术语/);assert.match(output,/导入文档原稿（逐字保留）/);assert.ok(output.includes(c.documents[0].text));assert.match(output,/````text/);
+});
+
+test('exam keyword retains score details from its numbered source item and excludes the next item',()=>{
+ const c=build('## 通知\n3. 没有期中考试。\n4. 期末笔试：开卷，两小时。题型：\n- 30分填空和选择\n- 70分画图分析\n- 请提前复习教材。\n5. 本周作业3-1。');
+ const h=extractHighlights(c,['期末','不存在']);assert.equal(h.length,1);assert.match(h[0].excerpt,/30分/);assert.match(h[0].excerpt,/70分/);assert.doesNotMatch(h[0].excerpt,/本周作业/);assert.doesNotMatch(h[0].excerpt,/期中/);assert.equal(h[0].keyword,'期末');assert.equal(h[0].cueIds.length,5);
+});
+test('unstructured keyword windows include context and merge overlap without crossing chapters',()=>{
+ const c=build('## 第一章\n前情。目标词出现。解释甲。解释乙。无关结尾。\n## 第二章\n其他内容。');
+ const h=extractHighlights(c,['目标词']);assert.equal(h.length,1);assert.match(h[0].excerpt,/前情/);assert.match(h[0].excerpt,/解释乙/);assert.doesNotMatch(h[0].excerpt,/无关结尾|其他内容/);assert.equal(h[0].cueIds.length,4);
 });

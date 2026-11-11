@@ -100,20 +100,38 @@ export function selectCues(course: Course, start?: number, end?: number): Cue[] 
 }
 export function extractHighlights(course: Course, keywords: string[]): Highlight[] {
   const result: Highlight[] = [];
+  const numberedItem = /^\s*\d+[.、)]\s*/;
+  const boundaries: [number,number][]=[];
+  for(let first=0;first<course.cues.length;) {
+    let last=first;
+    while(last+1<course.cues.length&&course.cues[last+1].chapterId===course.cues[first].chapterId)last++;
+    for(let i=first;i<=last;i++)boundaries[i]=[first,last];
+    first=last+1;
+  }
   for (const keyword of normalizeKeywords(keywords)) {
-    let previous: Highlight | undefined;
-    let previousIndex = -2;
+    const windows: {from:number;to:number;chapterId:string}[] = [];
     for (let i=0;i<course.cues.length;i++) {
-      const cue = course.cues[i];
-      const body = cue.correctedText || cue.text;
-      if (!body.toLocaleLowerCase().includes(keyword.toLocaleLowerCase())) continue;
-      if (previous && previous.chapterId === (cue.chapterId || '') && previousIndex === i-1) {
-        previous.cueIds.push(cue.id); previous.excerpt += '\n' + body; previous.end=cue.end;
-      } else {
-        previous = {id:`${cue.id}:${keyword}`,keyword,chapterId:cue.chapterId || '',cueIds:[cue.id],excerpt:body,start:cue.start,end:cue.end};
-        result.push(previous);
+      const cue=course.cues[i];
+      if (!(cue.correctedText||cue.text).toLocaleLowerCase().includes(keyword.toLocaleLowerCase())) continue;
+      const chapterId=cue.chapterId||'';
+      const [first,last]=boundaries[i];
+      let from=Math.max(first,i-1),to=Math.min(last,i+2);
+      // A numbered announcement often spans a title, scores, and several bullet cues.
+      // Keep that whole bounded source item, rather than dropping its non-keyword details.
+      let itemStart=-1;
+      for(let n=i;n>=Math.max(first,i-8);n--)if(numberedItem.test(course.cues[n].text)){itemStart=n;break;}
+      if(itemStart>=0) {
+        from=itemStart;
+        to=Math.min(last,itemStart+11);
+        for(let n=itemStart+1;n<=to;n++)if(numberedItem.test(course.cues[n].text)){to=n-1;break;}
       }
-      previousIndex=i;
+      const previous=windows.at(-1);
+      if(previous&&previous.chapterId===chapterId&&from<=previous.to+1)previous.to=Math.max(previous.to,to);
+      else windows.push({from,to,chapterId});
+    }
+    for(const window of windows) {
+      const cues=course.cues.slice(window.from,window.to+1);
+      result.push({id:`${cues[0].id}:${keyword}`,keyword,chapterId:window.chapterId,cueIds:cues.map(c=>c.id),excerpt:cues.map(c=>c.correctedText||c.text).join('\n'),start:cues[0].start,end:Math.max(...cues.map(c=>c.end))});
     }
   }
   return result.sort((a,b)=>a.start-b.start);
