@@ -184,7 +184,7 @@ export function applyTranscriptEdits(
         end: cue.end,
         cueIds: [id],
         primary: before,
-        correctedText: applyLocated(before, edits),
+        proposedText: applyLocated(before, edits),
         message:
           "语言模型提出数字、否定词、考试安排或姓名变更，尚未应用；需回查录音确认，防止语言润色改写事实。",
         note: pending

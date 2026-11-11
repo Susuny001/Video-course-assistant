@@ -42,7 +42,8 @@ test("numeric, negation and exam-period changes become review candidates instead
   assert.equal(out.course.cues[0].correctedText, undefined);
   assert.equal(out.audit.length, 1);
   assert.equal(out.audit[0].status, "open");
-  assert.equal(out.audit[0].correctedText, "没有期中考试，考试是70分。");
+  assert.equal(out.audit[0].proposedText, "没有期中考试，考试是70分。");
+  assert.equal(out.audit[0].correctedText, undefined);
   assert.equal(out.applied.length, 0);
 });
 test("equivalent spoken-number formatting is permitted but unsupported or ambiguous spans are rejected", () => {

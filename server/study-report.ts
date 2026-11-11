@@ -20,7 +20,16 @@ export interface AuditItem {
   status: ReviewStatus;
   note?: string;
   correctedText?: string;
+  proposedText?: string;
   reviewedAt?: string;
+  excludeFromReport?: boolean;
+  checks?: {
+    engine: string;
+    text: string;
+    sourceHash: string;
+    createdAt: string;
+    error?: string;
+  }[];
 }
 export interface ReportFact {
   category: "assignment" | "exam" | "schedule" | "reminder" | "focus";
@@ -95,6 +104,7 @@ export function textSimilarity(a: string, b: string): number {
 export function compareRecognitions(
   cues: Cue[],
   secondary: AcousticSegment[],
+  options: { duration?: number } = {},
 ): AuditItem[] {
   const items: AuditItem[] = [];
   for (const cue of cues) {
@@ -174,6 +184,72 @@ export function compareRecognitions(
         status: "open",
       });
   }
+  const coverage = cues
+    .filter((c) => Number.isFinite(c.start) && Number.isFinite(c.end) && c.end > c.start)
+    .map((c) => ({ start: Math.max(0, c.start), end: c.end }))
+    .sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const interval of coverage) {
+    const last = merged.at(-1);
+    if (last && interval.start <= last.end)
+      last.end = Math.max(last.end, interval.end);
+    else merged.push({ ...interval });
+  }
+  const duration = options.duration;
+  if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+    const boundaries = merged.length
+      ? [{ start: 0, end: Math.min(duration, merged[0].start) },
+          { start: Math.min(duration, merged.at(-1)!.end), end: duration }]
+      : [{ start: 0, end: duration }];
+    for (const gap of boundaries) {
+      if (gap.end - gap.start <= 45) continue;
+      items.push({
+        id: stableId(`boundary-gap:${gap.start}:${gap.end}`),
+        kind: "audio-gap",
+        severity: "medium",
+        start: gap.start,
+        end: gap.end,
+        cueIds: [],
+        primary: "",
+        message: `原录音首尾存在 ${Math.round(gap.end - gap.start)} 秒无第一轮识别文字的区间，可能为静音或漏识，需回听核查。`,
+        status: "open",
+      });
+    }
+  }
+  for (const segment of secondary) {
+    if (!Number.isFinite(segment.start) || !Number.isFinite(segment.end) ||
+        segment.end <= segment.start || typeof segment.text !== "string" || !segment.text.trim())
+      continue;
+    let cursor = Math.max(0, segment.start);
+    const end = typeof duration === "number" && Number.isFinite(duration) && duration > 0
+      ? Math.min(duration, segment.end) : segment.end;
+    const uncovered: { start: number; end: number }[] = [];
+    for (const interval of merged) {
+      if (interval.end <= cursor) continue;
+      if (interval.start >= end) break;
+      if (interval.start > cursor)
+        uncovered.push({ start: cursor, end: Math.min(end, interval.start) });
+      cursor = Math.max(cursor, interval.end);
+      if (cursor >= end) break;
+    }
+    if (cursor < end) uncovered.push({ start: cursor, end });
+    for (const gap of uncovered) {
+      // Ignore only sub-frame timestamp rounding differences, not short spoken notices.
+      if (gap.end - gap.start <= 0.05) continue;
+      items.push({
+        id: stableId(`secondary-uncovered:${gap.start}:${gap.end}:${segment.text}`),
+        kind: "audio-gap",
+        severity: "high",
+        start: gap.start,
+        end: gap.end,
+        cueIds: [],
+        primary: "",
+        secondary: clean(segment.text),
+        message: "独立声学模型在第一轮字幕未覆盖的音频区间识别到文字，可能漏识或分段不同，需回听。所列独立识别文字来自完整声学片段，未逐字对齐到此缺口，也未自动补入正文。",
+        status: "open",
+      });
+    }
+  }
   return items.sort(
     (a, b) => a.start - b.start || a.kind.localeCompare(b.kind),
   );
@@ -194,8 +270,11 @@ export function buildStudyReport(
     sourceHash?: string;
     model?: StructuredModelReport;
     audit?: AuditItem[];
+    excludedCueIds?: string[];
   } = {},
 ): StudyReport {
+  const excluded = new Set(options.excludedCueIds || []);
+  course = { ...course, cues: course.cues.filter((c) => !excluded.has(c.id)) };
   const keywords = (options.keywords || course.keywords || [])
     .map((k) => k.trim())
     .filter(Boolean)
@@ -224,7 +303,8 @@ export function buildStudyReport(
         end: Math.max(...sources.map((c) => c.end)),
       });
     }
-  } else
+  }
+  let supplemented = 0;
     for (let i = 0; i < course.cues.length; i++) {
       const cue = course.cues[i],
         body = currentText(cue),
@@ -232,6 +312,7 @@ export function buildStudyReport(
           category(body) ||
           (keywords.some((k) => body.includes(k)) ? "focus" : undefined);
       if (!kind) continue;
+      if (options.model && notices.some((notice) => notice.cueIds.includes(cue.id))) continue;
       const following = course.cues
         .slice(i + 1, i + 3)
         .filter(
@@ -241,6 +322,7 @@ export function buildStudyReport(
       const text = clean(sources.map(currentText).join(""));
       if (seen.has(text)) continue;
       seen.add(text);
+      supplemented++;
       notices.push({
         category: kind,
         text,
@@ -308,6 +390,12 @@ export function buildStudyReport(
     ...(options.model?.warnings || []),
     "原始语音识别与校对文本分别保留，文稿不代表已经逐字核实。",
   ];
+  if (options.model && supplemented)
+    warnings.push("部分通知或重点未被模型概括覆盖，已按来源原文补充，需对照回听审查。");
+  if (excluded.size)
+    warnings.push(
+      `经有记录的回听审查，${excluded.size} 段旁话/噪声未纳入正文；原始识别仍保存在课程与审查记录中。`,
+    );
   if (course.timing === "estimated")
     warnings.push("当前时间为文字估算，不能用于精确回听。");
   if (!options.model)
@@ -361,7 +449,7 @@ export function renderStudyReport(
     );
   keyfacts.forEach((fact, i) =>
     lines.push(
-      `${i + 1}. **${names[fact.category]}**（${showTime(fact.start)}–${showTime(fact.end)}）：${fact.text}`,
+      `${i + 1}. **${names[fact.category]}**（${showTime(fact.start)}–${showTime(fact.end)}）：${fact.text}${unresolved.some((item) => item.cueIds.some((id) => fact.cueIds.includes(id))) ? " **【待核查】**" : ""}`,
       "",
       "",
     ),
@@ -405,6 +493,9 @@ export function renderStudyReport(
     if (item.secondary) lines.push(`- 独立模型：${item.secondary}`);
     if (item.note) lines.push(`- 审查说明：${item.note}`);
     if (item.correctedText) lines.push(`- 审查后文本：${item.correctedText}`);
+    if (item.proposedText) lines.push(`- 未采用的校对候选：${item.proposedText}`);
+    if(item.excludeFromReport)lines.push("- 正文处理：经审查后不纳入正文，原始识别保留。");
+    for(const check of item.checks||[])lines.push(check.error?`- ${check.engine} 复核失败：${check.error}`:`- ${check.engine} 实际音频复核：${check.text}（音频 SHA-256：${check.sourceHash}）`);
     lines.push("");
   }
   lines.push("## 说明", "", ...report.warnings.map((w) => "- " + w), "");

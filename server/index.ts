@@ -13,6 +13,8 @@ import { parseTranscript, normalizeKeywords, retimeEstimated, extractHighlights,
 import { testProvider, chatWithCourse, runCourseJob, isProviderConfigured, ProviderError, listProviderModels } from './ai.ts';
 
 import {localAsrStatus,runLocalRecognition} from './local-asr.ts';
+import {getWorkflow,startWorkflow,reviewWorkflowItem,isWorkflowActive,removeWorkflow,startAuditRecheck} from './workflow.ts';
+import {localModelStatus,ensureLocalModelServer,effectiveLocalSettings} from './local-model.ts';
 
 const execFileAsync=promisify(execFile);
 const mediaExtensions=new Set(['.mp3','.wav','.m4a','.ogg','.mp4','.webm','.mov']);
@@ -73,10 +75,11 @@ async function addFiles(course:Course,files:Express.Multer.File[],transcript?:st
   return oldMedia&&media[0]?path.join(mediaDir,path.basename(oldMedia)):undefined;
 }
 function idParam(req:express.Request){return String(req.params.id);}
-function unlocked(id:string){if(activeJobs.has(id))throw error(409,'课程正在处理，请任务完成后再修改。');}
+function unlocked(id:string){if(activeJobs.has(id)||isWorkflowActive(id))throw error(409,'课程正在处理，请任务完成后再修改。');}
 function numeric(value:unknown):number|undefined{if(value===undefined||value===null||value==='')return undefined;if(typeof value!=='number'||!Number.isFinite(value))throw error(400,'时间必须是有效的秒数。');return value;}
 function mediaPath(course:Course){return course.media?path.join(mediaDir,path.basename(course.media.url)):undefined;}
 
+app.get('/api/local-model',route(async(_req,res)=>res.json(await localModelStatus())));
 app.get('/api/local-asr',route(async(_req,res)=>res.json(await localAsrStatus())));
 app.get('/api/health',(_req,res)=>res.json({ok:true,service:'video-course-assistant'}));
 app.get('/api/courses',route(async(_req,res)=>res.json(await listCourses())));
@@ -100,7 +103,7 @@ app.patch('/api/courses/:id',route(async(req,res)=>{
   if(duration!==undefined){if(duration<=0||duration>7*24*3600)throw error(400,'时长必须在 0 秒到 7 天之间。');if(course.media)course.media.duration=duration;retimeEstimated(course,duration);}
   res.json(await saveCourse(course));
 }));
-app.delete('/api/courses/:id',route(async(req,res)=>{unlocked(idParam(req));await removeCourse(idParam(req));res.status(204).end();}));
+app.delete('/api/courses/:id',route(async(req,res)=>{unlocked(idParam(req));await removeCourse(idParam(req));await removeWorkflow(idParam(req));res.status(204).end();}));
 app.post('/api/courses/:id/files',route(async(req,res)=>{
   const id=idParam(req);unlocked(id);const course=await getCourse(id);
   await uploadRequest(req,res);const files=uploaded(req);
@@ -115,38 +118,58 @@ app.post('/api/courses/:id/chat',route(async(req,res)=>{
   const course=await getCourse(idParam(req));const question=req.body.question;
   if(typeof question!=='string'||!question.trim()||question.length>5000)throw error(400,'请输入 1 到 5000 字的问题。');
   const start=numeric(req.body.start),end=numeric(req.body.end);selectCues(course,start,end);
-  const settings=await getSettings();
+  const settings=await effectiveLocalSettings(await getSettings());
   if(req.body.useVision&&!isProviderConfigured(settings))throw error(400,'结合画面答疑需要先连接支持视觉的 AI 模型。');
   if(!isProviderConfigured(settings))return res.json(localChat(course,question,start,end));
   const history=Array.isArray(req.body.history)?req.body.history.slice(-20).filter((m:unknown)=>m&&typeof m==='object'&&['user','assistant'].includes((m as {role:string}).role)&&typeof (m as {content:unknown}).content==='string').map((m:{role:'user'|'assistant';content:string})=>({role:m.role,content:m.content.slice(0,8000)})):[];
   res.json(await chatWithCourse(course,settings,{question:question.trim(),start,end,history,useVision:!!req.body.useVision,mediaPath:mediaPath(course)}));
 }));
-app.get('/api/settings',route(async(_req,res)=>res.json(publicSettings(await getSettings()))));
+app.get('/api/settings',route(async(_req,res)=>res.json(publicSettings(await effectiveLocalSettings(await getSettings())))));
 app.put('/api/settings',route(async(req,res)=>{
   const settings=await getSettings();
   for(const key of ['baseUrl','model','speechModel','language'] as const){if(req.body[key]!==undefined){if(typeof req.body[key]!=='string'||req.body[key].length>2048)throw error(400,'模型设置字段无效。');settings[key]=req.body[key].trim();}}
   if(settings.baseUrl){let url:URL;try{url=new URL(settings.baseUrl);}catch{throw error(400,'接口地址格式无效。');}if(!['https:','http:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw error(400,'接口地址只能是无凭据的 HTTP(S) 地址。');}
   if(req.body.apiKey!==undefined){if(typeof req.body.apiKey!=='string'||req.body.apiKey.length>4096)throw error(400,'API Key 格式无效。');settings.apiKey=req.body.apiKey.trim();}
   if(req.body.terminologyOnly!==undefined)settings.terminologyOnly=!!req.body.terminologyOnly;
+  if(req.body.speechEngine!==undefined){if(!['local','api'].includes(req.body.speechEngine))throw error(400,'语音引擎无效。');settings.speechEngine=req.body.speechEngine;}
   if(req.body.reasoningEffort!==undefined){if(!['none','low','medium','high'].includes(req.body.reasoningEffort))throw error(400,'思考强度无效。');settings.reasoningEffort=req.body.reasoningEffort;}
   await saveSettings(settings);res.json(publicSettings(settings));
 }));
-app.post('/api/settings/test',route(async(_req,res)=>res.json(await testProvider(await getSettings()))));
-app.get('/api/models',route(async(_req,res)=>res.json({models:await listProviderModels(await getSettings())})));
+app.post('/api/settings/test',route(async(_req,res)=>res.json(await testProvider(await effectiveLocalSettings(await getSettings())))));
+app.get('/api/models',route(async(_req,res)=>res.json({models:await listProviderModels(await effectiveLocalSettings(await getSettings()))})));
 app.post('/api/courses/:id/jobs',route(async(req,res)=>{
   const course=await getCourse(idParam(req));unlocked(course.id);const type=req.body.type;
   if(!['transcribe','translate','correct','summarize'].includes(type))throw error(400,'不支持的处理任务。');
-  const settings=await getSettings();
-  const local=type==='transcribe'&&(req.body.engine==='local'||!isProviderConfigured(settings));
+  const settings=await effectiveLocalSettings(await getSettings());
+  if(req.body.engine!==undefined&&!['local','api'].includes(req.body.engine))throw error(400,'语音引擎无效。');
+  const speechEngine=req.body.engine||settings.speechEngine||'local';
+  settings.speechEngine=speechEngine;
+  const local=type==='transcribe'&&speechEngine==='local';
   if(local){const status=await localAsrStatus();if(!status.ready)throw error(400,status.message);}
   else if(!isProviderConfigured(settings))throw error(400,'请先在模型设置中连接 AI；语音转录也可使用本地识别，无需 API Key。');
   const start=numeric(req.body.start),end=numeric(req.body.end);selectCues(course,start,end);
-  const job:Job={id:randomUUID(),courseId:course.id,type,status:'queued',progress:'等待处理',createdAt:new Date().toISOString()};jobs.set(job.id,job);activeJobs.add(course.id);
+  unlocked(course.id);const job:Job={id:randomUUID(),courseId:course.id,type,status:'queued',progress:'等待处理',createdAt:new Date().toISOString()};jobs.set(job.id,job);activeJobs.add(course.id);
   // Keep bounded terminal job history; active jobs are never evicted.
   if(jobs.size>500)for(const [id,j]of jobs){if(j.status==='done'||j.status==='error'){jobs.delete(id);if(jobs.size<=400)break;}}
   res.status(202).json(job);
   void (async()=>{try{job.status='running';job.progress='正在处理';const options={type,start,end,mediaPath:mediaPath(course),onProgress:(message:string)=>{job.progress=message;}};const updated=local?await runLocalRecognition(course,options):await runCourseJob(course,settings,options);await saveCourse(updated);job.status='done';job.progress='处理完成';}catch(e){job.status='error';job.error=(e as Error).message||'任务失败，请检查模型配置。';job.progress='处理失败';}finally{activeJobs.delete(course.id);}})();
 }));
+app.get('/api/courses/:id/workflow',route(async(req,res)=>{await getCourse(idParam(req));res.json(await getWorkflow(idParam(req)));}));
+app.post('/api/courses/:id/workflow',route(async(req,res)=>{
+ const id=idParam(req);unlocked(id);
+ const body=req.body;
+ if(body.targetLanguage!==undefined&&(typeof body.targetLanguage!=='string'||body.targetLanguage.length>80))throw error(400,'文档目标语言无效。');
+ if(body.keywords!==undefined&&!Array.isArray(body.keywords)&&typeof body.keywords!=='string')throw error(400,'关键词格式无效。');
+ res.status(202).json(await startWorkflow(id,{keywords:body.keywords===undefined?undefined:normalizeKeywords(body.keywords),targetLanguage:body.targetLanguage,terminologyOnly:!!body.terminologyOnly,useExistingTranscript:!!body.useExistingTranscript,translate:!!body.translate}));
+}));
+app.get('/api/courses/:id/report',route(async(req,res)=>{
+ await getCourse(idParam(req));const state=await getWorkflow(idParam(req));if(!state?.report)throw error(404,'课程文稿尚未生成。');
+ const format=String(req.query.format||'md');if(format==='json')return res.json(state.report);if(format!=='md')throw error(400,'课程文稿仅支持 Markdown 或 JSON。');
+ res.setHeader('Content-Type','text/markdown; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="study-report.md"; filename*=UTF-8''${encodeURIComponent(state.report.title+'-课程文稿.md')}`);res.send(state.report.markdown);
+}));
+app.get('/api/courses/:id/reviews',route(async(req,res)=>{await getCourse(idParam(req));res.json((await getWorkflow(idParam(req)))?.audit||[]);}));
+app.post('/api/courses/:id/reviews/:reviewId/recheck',route(async(req,res)=>{unlocked(idParam(req));res.status(202).json(await startAuditRecheck(idParam(req),String(req.params.reviewId)));}));
+app.patch('/api/courses/:id/reviews/:reviewId',route(async(req,res)=>{if(activeJobs.has(idParam(req)))throw error(409,'课程正在处理，请任务完成后再审查。');res.json(await reviewWorkflowItem(idParam(req),String(req.params.reviewId),{status:req.body.status,note:req.body.note,correctedText:req.body.correctedText,excludeFromReport:req.body.excludeFromReport}));}));
 app.get('/api/jobs/:id',(req,res)=>{const job=jobs.get(idParam(req));if(!job)return res.status(404).json({error:'任务不存在或服务已重启，请刷新课程查看已保存结果。'});res.json(job);});
 app.use('/api',(_req,res)=>res.status(404).json({error:'接口不存在。'}));
 const projectRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -159,6 +182,7 @@ app.use((err:Error & {status?:number;statusCode?:number;code?:string},_req:expre
 });
 // Keep demonstration material separate from user uploads, and never reseed a nonempty library.
 if(!(await listCourses()).length){try{const text=await fs.readFile(path.join(projectRoot,'examples/course.md'),'utf8');const now=new Date().toISOString();await saveCourse({id:randomUUID(),title:'计算机绘图 · 剖视图与断面图',createdAt:now,updatedAt:now,documents:[{id:randomUUID(),name:'示例课程节选.md',type:'md',text}],...parseTranscript(text,'示例课程节选.md'),language:'zh',keywords:['作业','大作业','期末','开卷','下节课','提醒']});}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
+void ensureLocalModelServer().catch(()=>{});
 const port=Number(process.env.PORT||3001),host=process.env.HOST||'127.0.0.1';
 app.listen(port,host,()=>console.log(`Course assistant API listening on ${host}:${port}; data: ${path.basename(dataDir)}`));
 export { app };
