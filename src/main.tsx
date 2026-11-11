@@ -46,12 +46,15 @@ import type {
 } from "./types";
 import "./style.css";
 import { buildVtt } from "./subtitles";
+import { WorkflowPanel } from "./workflow-panel";
+import { captionForTime, INTERPOLATED_CAPTION_NOTE } from "./caption-layout";
 
 const DEFAULT_KEYWORDS = ["作业", "大作业", "期末", "开卷", "下节课", "提醒"];
 const initialSettings: ProviderSettings = {
   baseUrl: "https://api.openai.com/v1",
   model: "gpt-4o-mini",
   speechModel: "whisper-1",
+  speechEngine: "local",
   language: "英语",
   terminologyOnly: false,
   reasoningEffort: "none",
@@ -120,6 +123,9 @@ function App() {
     message: string;
   }>({ ready: false, message: "" });
   const [appendImport, setAppendImport] = useState(false);
+  const [autoWorkflowCourse, setAutoWorkflowCourse] = useState<string | null>(
+    null,
+  );
   const [subtitleUrl, setSubtitleUrl] = useState("");
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [query, setQuery] = useState(""),
@@ -374,7 +380,9 @@ function App() {
         "/courses/" + course.id + "/jobs",
         json({
           type,
-          ...(type === "transcribe" && localSpeech.ready
+          ...(type === "transcribe" &&
+          localSpeech.ready &&
+          settings.speechEngine !== "api"
             ? { engine: "local" }
             : {}),
           ...(range ? { start: range[0], end: range[1] } : {}),
@@ -434,10 +442,12 @@ function App() {
         : [c.start, c.end],
     );
   }
-  const currentSource =
-    caption === "corrected"
-      ? activeCue?.correctedText || activeCue?.text
-      : activeCue?.text;
+  const displayCaption = captionForTime(activeCue, current, caption);
+  const currentSource = displayCaption
+    ? caption === "bilingual"
+      ? displayCaption.text.replace(/\r\n?|\n/g, " ")
+      : displayCaption.lines.join("\n")
+    : undefined;
 
   return (
     <div className="app-shell">
@@ -633,9 +643,27 @@ function App() {
                 补充资料
               </button>
             </section>
+            <WorkflowPanel
+              key={course.id}
+              course={course}
+              keywords={keywordList}
+              initialTerminologyOnly={settings.terminologyOnly}
+              initialTargetLanguage={settings.language}
+              autoStart={autoWorkflowCourse === course.id}
+              onAutoStarted={() => setAutoWorkflowCourse(null)}
+              onCourseChanged={refresh}
+              onSource={(start, end) => {
+                setRange([start, end]);
+                seek(start);
+                media.current?.play().catch(fail);
+                document
+                  .getElementById("course-player")
+                  ?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+            />
             <div className="study-grid">
               <div className="study-left">
-                <section className="player-card">
+                <section className="player-card" id="course-player">
                   <div
                     className={
                       "media-stage " +
@@ -758,14 +786,27 @@ function App() {
                       {caption === "corrected" ? "校对" : "原文"}
                     </span>
                     <div>
-                      <p>
-                        {currentSource || "选择下方文字，开始浏览课程内容。"}
+                      <p className="readable-live-caption">
+                        {currentSource ??
+                          (activeCue
+                            ? " "
+                            : "选择下方文字，开始浏览课程内容。")}
                       </p>
                       {caption === "bilingual" && (
                         <p className="translated-caption">
-                          {activeCue?.translation ||
-                            "此段尚未翻译 · 可在字幕工具中生成双语字幕"}
+                          {displayCaption?.translation?.replace(/\r\n?|\n/g, " ") ??
+                            (activeCue?.translation
+                              ? " "
+                              : "此段尚未翻译 · 可在字幕工具中生成双语字幕")}
                         </p>
+                      )}
+                      {displayCaption?.timing === "interpolated" && (
+                        <span
+                          className="caption-estimate"
+                          title={INTERPOLATED_CAPTION_NOTE}
+                        >
+                          段内时间为估算
+                        </span>
                       )}
                     </div>
                   </div>
@@ -949,7 +990,7 @@ function App() {
                     <div>
                       <button
                         title={
-                          localSpeech.ready
+                          localSpeech.ready && settings.speechEngine !== "api"
                             ? "无需 API Key，本机识别录音并生成时间字幕"
                             : "从录音生成真实时间字幕"
                         }
@@ -957,7 +998,9 @@ function App() {
                         onClick={() => startJob("transcribe")}
                       >
                         <Headphones size={14} />
-                        {localSpeech.ready ? "本地转录" : "转录"}
+                        {localSpeech.ready && settings.speechEngine !== "api"
+                          ? "本地转录"
+                          : "转录"}
                       </button>
                       <button
                         disabled={jobBusy || !course.cues.length}
@@ -1392,6 +1435,15 @@ function App() {
                         <button onClick={() => setRange(null)}>清除</button>
                       )}
                     </div>
+                    {range &&
+                      course.media &&
+                      settings.baseUrl &&
+                      settings.model && (
+                        <div className="audio-context-note">
+                          <Headphones size={12} />
+                          答疑时会重新核对所选片段的录音。
+                        </div>
+                      )}
                     <div className="chat-messages">
                       {!messages.length && (
                         <div className="chat-welcome">
@@ -1598,10 +1650,16 @@ function App() {
               <ImportDialog
                 course={course}
                 defaultExisting={appendImport}
-                onDone={async (id) => {
+                localReady={localSpeech.ready}
+                onDone={async (id, processAfterImport) => {
                   setModal(null);
                   await refresh(id);
-                  notify("资料已导入，原始文字稿已保留");
+                  if (processAfterImport) setAutoWorkflowCourse(id);
+                  notify(
+                    processAfterImport
+                      ? "资料已导入，正在开始整堂课处理"
+                      : "资料已导入，原始文字稿已保留",
+                  );
                 }}
                 onError={fail}
               />
@@ -1827,12 +1885,14 @@ function EngineeringArt() {
 function ImportDialog({
   course,
   defaultExisting,
+  localReady,
   onDone,
   onError,
 }: {
   course: Course | null;
   defaultExisting: boolean;
-  onDone: (id: string) => void;
+  localReady: boolean;
+  onDone: (id: string, processAfterImport: boolean) => void;
   onError: (e: unknown) => void;
 }) {
   const [files, setFiles] = useState<File[]>([]),
@@ -1842,6 +1902,12 @@ function ImportDialog({
     [busy, setBusy] = useState(false),
     [drag, setDrag] = useState(false),
     [progress, setProgress] = useState(0);
+  const [processAfterImport, setProcessAfterImport] = useState(false);
+  const hasMedia = files.some(
+    (f) =>
+      /^(audio|video)\//.test(f.type) ||
+      /\.(mp3|mp4|m4a|wav|webm|ogg|mov)$/i.test(f.name),
+  );
   const input = useRef<HTMLInputElement | null>(null);
   const add = (f: FileList | null) => {
     if (f) setFiles((old) => [...old, ...Array.from(f)]);
@@ -1876,7 +1942,7 @@ function ImportDialog({
               ? data.error
               : data.message || "导入失败",
           );
-        onDone(data.id || data.course?.id);
+        onDone(data.id || data.course?.id, processAfterImport && hasMedia);
       } catch (e) {
         onError(e);
       }
@@ -1972,6 +2038,23 @@ function ImportDialog({
           placeholder="粘贴课程原文，支持 Markdown 和带时间戳的字幕…"
         />
       </details>
+      {hasMedia && (
+        <label className="auto-workflow-option">
+          <input
+            type="checkbox"
+            checked={processAfterImport}
+            onChange={(e) => setProcessAfterImport(e.target.checked)}
+          />
+          <div>
+            <strong>导入后自动整理整堂课并建立审查清单</strong>
+            <small>
+              {localReady
+                ? "使用本地声学模型识别与交叉核对；可以继续回放，结果自动保存。"
+                : "需要先准备本地识别模型；也可以先导入，稍后开始处理。"}
+            </small>
+          </div>
+        </label>
+      )}
       <div className="notice">
         <FileText size={15} />
         文字稿可直接使用。音视频转录可使用已安装的本地识别，或连接语音模型接口；原始录音会保留。
@@ -2071,6 +2154,7 @@ function SettingsDialog({
               baseUrl: "https://api.openai.com/v1",
               model: "gpt-4o-mini",
               speechModel: "whisper-1",
+              speechEngine: "local",
             })
           }
         >
@@ -2132,6 +2216,16 @@ function SettingsDialog({
           移除已保存的密钥
         </label>
       )}
+      <label className="form-field">
+        语音识别来源
+        <select
+          value={s.speechEngine || "local"}
+          onChange={(e) => field("speechEngine", e.target.value)}
+        >
+          <option value="local">本机语音模型（无需语音 API）</option>
+          <option value="api">语音 API（使用下方配置）</option>
+        </select>
+      </label>
       <div className="form-columns">
         <label className="form-field">
           答疑 / 翻译模型
