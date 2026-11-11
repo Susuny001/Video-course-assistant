@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chatWithCourse, listProviderModels, runCourseJob, selectedCues, testProvider } from '../server/ai.js';
+import { chatWithCourse, courseTextCompletion, listProviderModels, runCourseJob, selectedCues, testProvider } from '../server/ai.js';
 import type { Course, ProviderSettings } from '../src/types.js';
 
 const settings: ProviderSettings = {baseUrl:'https://models.example/v1',apiKey:'private-key-not-to-expose',model:'study-model',speechModel:'whisper-1',language:'英语',terminologyOnly:false,reasoningEffort:'none'};
@@ -213,4 +213,9 @@ test('provider request honors inherited environment proxy routing without overri
   } finally {
     if (previous === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previous;
   }
+});
+
+test('selected-provider text processing rejects length-limited output before it becomes a report',async()=>{
+ globalThis.fetch=async()=>Response.json({choices:[{finish_reason:'length',message:{content:'{"summary":"看似完整"}'}}]});
+ await assert.rejects(courseTextCompletion(settings,'来源材料',{maxTokens:128,temperature:0}),/长度上限/);
 });
