@@ -26,6 +26,7 @@ const upload=multer({storage:multer.diskStorage({destination:mediaDir,filename:(
 const app=express();
 app.disable('x-powered-by');
 app.use(express.json({limit:'12mb'}));
+app.use((req,_res,next)=>{req.body ??= {};next();});
 app.use('/media',express.static(mediaDir,{dotfiles:'deny',setHeaders(res){res.setHeader('X-Content-Type-Options','nosniff');}}));
 const route=(handler:(req:express.Request,res:express.Response)=>Promise<unknown>)=>(req:express.Request,res:express.Response,next:express.NextFunction)=>{handler(req,res).catch(next);};
 function uploaded(req:express.Request){return (req.files as Express.Multer.File[])||[];}
