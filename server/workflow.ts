@@ -55,6 +55,7 @@ export interface WorkflowState {
   updatedAt: string;
   error?: string;
   sourceHash?: string;
+  sourceMediaUrl?: string;
   runnerId?: string;
   runnerPid?: number;
   options?: StartWorkflowOptions;
@@ -487,6 +488,7 @@ export async function startWorkflow(
     updatedAt: now,
     runnerId,
     runnerPid: process.pid,
+    sourceMediaUrl: course.media.url,
     options: { ...options, keywords },
   };
   running.set(courseId, state);
@@ -829,6 +831,35 @@ async function execute(
     await persist(state);
   }
 }
+function refreshReviewedReport(state: WorkflowState, course: Course) {
+  if (state.reportBase) state.report = structuredClone(state.reportBase);
+  if (state.report) {
+    const excluded = new Set(
+      state.audit
+        .filter((a) => a.excludeFromReport && a.status !== "open")
+        .flatMap((a) => a.cueIds),
+    );
+    if (excluded.size) {
+      state.report.sections = state.report.sections
+        .map((section) => {
+          const paragraphs = section.paragraphs.filter((p) => !p.cueIds.some((id) => excluded.has(id)));
+          return {...section, cueIds: section.cueIds.filter((id) => !excluded.has(id)), paragraphs,
+            abstract: section.cueIds.some((id) => excluded.has(id)) ? "保留内容原文摘录：" + paragraphs.map((p) => p.text).join(" ").slice(0, 1900) : section.abstract};
+        })
+        .filter((section) => section.paragraphs.length);
+      state.report.notices = state.report.notices.flatMap((fact) => {
+        if (!fact.cueIds.some((id) => excluded.has(id))) return [fact];
+        const sources = course.cues.filter((cue) => fact.cueIds.includes(cue.id) && !excluded.has(cue.id));
+        if (!sources.length) return [];
+        return [{...fact, cueIds: sources.map((cue) => cue.id), text: sources.map((cue) => cue.correctedText || cue.text).join(" "), start: sources[0].start, end: sources.at(-1)!.end}];
+      });
+      state.report.warnings.push(
+        "部分经实际审查确认的噪声或旁话未纳入正文，原始识别保留。",
+      );
+    }
+    state.report.markdown = renderStudyReport(state.report, state.audit);
+  }
+}
 export async function reviewWorkflowItem(
   courseId: string,
   itemId: string,
@@ -852,6 +883,8 @@ async function reviewItem(courseId: string, itemId: string, input: {status?: unk
     state.reportBase = structuredClone(state.report);
   if (!item) throw problem("审查项不存在。", 404);
   const course = await getCourse(courseId);
+  if (state.sourceMediaUrl && state.sourceMediaUrl !== course.media?.url)
+    throw problem("原录音已替换，请重新处理当前课程后再审查。");
   if (item.cueIds.some((id) => !course.cues.some((cue) => cue.id === id)))
     throw problem("来源字幕已改变，请重新生成审查记录。");
   if (!["open", "confirmed", "dismissed"].includes(String(input.status)))
@@ -920,33 +953,7 @@ async function reviewItem(courseId: string, itemId: string, input: {status?: unk
     state.status === "done"
       ? "当前列出的审查项均已有结论。"
       : "已保存本项审查，仍有其他待核查内容。";
-  if (state.reportBase) state.report = structuredClone(state.reportBase);
-  if (state.report) {
-    const excluded = new Set(
-      state.audit
-        .filter((a) => a.excludeFromReport && a.status !== "open")
-        .flatMap((a) => a.cueIds),
-    );
-    if (excluded.size) {
-      state.report.sections = state.report.sections
-        .map((section) => {
-          const paragraphs = section.paragraphs.filter((p) => !p.cueIds.some((id) => excluded.has(id)));
-          return {...section, cueIds: section.cueIds.filter((id) => !excluded.has(id)), paragraphs,
-            abstract: section.cueIds.some((id) => excluded.has(id)) ? "保留内容原文摘录：" + paragraphs.map((p) => p.text).join(" ").slice(0, 1900) : section.abstract};
-        })
-        .filter((section) => section.paragraphs.length);
-      state.report.notices = state.report.notices.flatMap((fact) => {
-        if (!fact.cueIds.some((id) => excluded.has(id))) return [fact];
-        const sources = course.cues.filter((cue) => fact.cueIds.includes(cue.id) && !excluded.has(cue.id));
-        if (!sources.length) return [];
-        return [{...fact, cueIds: sources.map((cue) => cue.id), text: sources.map((cue) => cue.correctedText || cue.text).join(" "), start: sources[0].start, end: sources.at(-1)!.end}];
-      });
-      state.report.warnings.push(
-        "部分经实际审查确认的噪声或旁话未纳入正文，原始识别保留。",
-      );
-    }
-    state.report.markdown = renderStudyReport(state.report, state.audit);
-  }
+  refreshReviewedReport(state, course);
   await persistArtifacts(state);
   await persist(state);
   return item;
@@ -1016,6 +1023,8 @@ export async function startAuditRecheck(
       const audio = path.join(mediaDir, path.basename(course.media!.url)),
         hash = await hashFile(audio),
         directory = path.join(artifactDir(courseId, state.id), "rechecks");
+      if (state.sourceHash && hash !== state.sourceHash)
+        throw problem("原录音已替换，未将旧审查项与新录音混合，请重新处理整堂课。");
       await fs.mkdir(directory, { recursive: true });
       const output = path.join(directory, item.id + "-" + Date.now() + ".json");
       const result = await independentRecognition(
@@ -1062,8 +1071,7 @@ export async function startAuditRecheck(
         : "done";
       stage.status = item.checks?.at(-1)?.error ? "error" : "done";
       stage.message = state.progress;
-      if (state.report)
-        state.report.markdown = renderStudyReport(state.report, state.audit);
+      refreshReviewedReport(state, course);
       await persistArtifacts(state);
       await persist(state);
       running.delete(courseId);

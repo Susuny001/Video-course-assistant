@@ -305,32 +305,32 @@ export function buildStudyReport(
     }
   }
   let supplemented = 0;
-    for (let i = 0; i < course.cues.length; i++) {
-      const cue = course.cues[i],
-        body = currentText(cue),
-        kind =
-          category(body) ||
-          (keywords.some((k) => body.includes(k)) ? "focus" : undefined);
-      if (!kind) continue;
-      if (options.model && notices.some((notice) => notice.cueIds.includes(cue.id))) continue;
-      const following = course.cues
-        .slice(i + 1, i + 3)
-        .filter(
-          (c) => c.chapterId === cue.chapterId && c.start - cue.end < 2.5,
-        );
-      const sources = [cue, ...following];
-      const text = clean(sources.map(currentText).join(""));
-      if (seen.has(text)) continue;
-      seen.add(text);
-      supplemented++;
-      notices.push({
-        category: kind,
-        text,
-        cueIds: sources.map((c) => c.id),
-        start: cue.start,
-        end: sources.at(-1)!.end,
-      });
-    }
+  for (let i = 0; i < course.cues.length; i++) {
+    const cue = course.cues[i],
+      body = currentText(cue),
+      kind =
+        category(body) ||
+        (keywords.some((k) => body.includes(k)) ? "focus" : undefined);
+    if (!kind) continue;
+    if (options.model && notices.some((notice) => notice.cueIds.includes(cue.id))) continue;
+    const following = course.cues
+      .slice(i + 1, i + 3)
+      .filter(
+        (c) => c.chapterId === cue.chapterId && c.start - cue.end < 2.5,
+      );
+    const sources = [cue, ...following];
+    const text = clean(sources.map(currentText).join(""));
+    if (seen.has(text)) continue;
+    seen.add(text);
+    supplemented++;
+    notices.push({
+      category: kind,
+      text,
+      cueIds: sources.map((c) => c.id),
+      start: cue.start,
+      end: sources.at(-1)!.end,
+    });
+  }
   const used = new Set<string>();
   const sections: ReportSection[] = [];
   if (options.model?.sections) {
