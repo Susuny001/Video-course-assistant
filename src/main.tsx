@@ -45,6 +45,7 @@ import type {
   Job,
 } from "./types";
 import "./style.css";
+import { buildVtt } from "./subtitles";
 
 const DEFAULT_KEYWORDS = ["作业", "大作业", "期末", "开卷", "下节课", "提醒"];
 const initialSettings: ProviderSettings = {
@@ -114,6 +115,8 @@ function App() {
     [range, setRange] = useState<[number, number] | null>(null),
     [repeat, setRepeat] = useState(false),
     [rate, setRate] = useState("1");
+  const [appendImport, setAppendImport] = useState(false);
+  const [subtitleUrl, setSubtitleUrl] = useState("");
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [query, setQuery] = useState(""),
     [caption, setCaption] = useState<"original" | "bilingual" | "corrected">(
@@ -157,6 +160,21 @@ function App() {
           .toLowerCase()
           .includes(query.toLowerCase()),
     ) || [];
+  function openImport(append = false) {
+    setAppendImport(append);
+    setModal("import");
+  }
+  useEffect(() => {
+    if (!course?.cues.length) {
+      setSubtitleUrl("");
+      return;
+    }
+    const url = URL.createObjectURL(
+      new Blob([buildVtt(course.cues, caption)], { type: "text/vtt" }),
+    );
+    setSubtitleUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [course?.cues, caption]);
   const notify = (s: string) => {
     setToast(s);
     setTimeout(() => setToast(""), 4000);
@@ -426,7 +444,7 @@ function App() {
           </div>
           <span className="status-dot" />
         </div>
-        <button className="import-side" onClick={() => setModal("import")}>
+        <button className="import-side" onClick={() => openImport(false)}>
           <Plus size={17} />
           导入一堂新课
         </button>
@@ -558,7 +576,7 @@ function App() {
             <p>导入录音、视频或文字稿，创建你的第一门课。</p>
             <button
               className="button primary"
-              onClick={() => setModal("import")}
+              onClick={() => openImport(false)}
             >
               <Plus size={17} />
               导入课程
@@ -596,7 +614,7 @@ function App() {
               </div>
               <button
                 className="button subtle attach-button"
-                onClick={() => setModal("import")}
+                onClick={() => openImport(true)}
               >
                 <Upload size={15} />
                 补充资料
@@ -635,7 +653,18 @@ function App() {
                               syncDuration(e.currentTarget);
                             }}
                             controls
-                          />
+                          >
+                            {subtitleUrl && (
+                              <track
+                                key={subtitleUrl}
+                                kind="subtitles"
+                                label="课程字幕"
+                                srcLang={course.language || "zh"}
+                                src={subtitleUrl}
+                                default
+                              />
+                            )}
+                          </video>
                         ) : (
                           <audio
                             key={course.media.url}
@@ -702,7 +731,7 @@ function App() {
                             )}
                           </span>
                           {!course.media && (
-                            <button onClick={() => setModal("import")}>
+                            <button onClick={() => openImport(true)}>
                               <Plus size={13} />
                               添加录音 / 视频
                             </button>
@@ -1061,7 +1090,7 @@ function App() {
                         {!query && (
                           <button
                             className="button subtle"
-                            onClick={() => setModal("import")}
+                            onClick={() => openImport(true)}
                           >
                             导入资料
                           </button>
@@ -1551,6 +1580,7 @@ function App() {
             {modal === "import" ? (
               <ImportDialog
                 course={course}
+                defaultExisting={appendImport}
                 onDone={async (id) => {
                   setModal(null);
                   await refresh(id);
@@ -1779,17 +1809,19 @@ function EngineeringArt() {
 
 function ImportDialog({
   course,
+  defaultExisting,
   onDone,
   onError,
 }: {
   course: Course | null;
+  defaultExisting: boolean;
   onDone: (id: string) => void;
   onError: (e: unknown) => void;
 }) {
   const [files, setFiles] = useState<File[]>([]),
     [title, setTitle] = useState(""),
     [text, setText] = useState(""),
-    [existing, setExisting] = useState(!!course),
+    [existing, setExisting] = useState(defaultExisting && !!course),
     [busy, setBusy] = useState(false),
     [drag, setDrag] = useState(false),
     [progress, setProgress] = useState(0);
