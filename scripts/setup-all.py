@@ -134,6 +134,25 @@ def server_start(progress: Progress, port: int, app_data: Path) -> None:
     raise RuntimeError('应用未在预计时间内就绪，请查看启动日志。')
 
 
+def acquire_setup_lock(directory: Path):
+    directory.mkdir(parents=True, exist_ok=True)
+    lock=(directory/'setup.lock').open('a+b')
+    try:
+        if os.name=='nt':
+            import msvcrt
+            if lock.tell()==0:
+                lock.write(b'0');lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        return None
+    return lock
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--start', action='store_true', help='Start the app after installation (Linux/macOS).')
@@ -145,6 +164,10 @@ def main() -> int:
     parser.add_argument('--state-dir', type=Path, default=ROOT/'data/setup')
     parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', '3001')))
     args = parser.parse_args()
+    setup_lock=acquire_setup_lock(args.state_dir.resolve())
+    if setup_lock is None:
+        print('已有环境准备进程正在运行，请查看 data/setup/status.html；未启动第二个安装。',file=sys.stderr)
+        return 3
     progress = Progress(args.state_dir.resolve(), args.port)
     try:
         if not 1 <= args.port <= 65535:
@@ -197,6 +220,8 @@ def main() -> int:
         progress.write()
         print(f'环境准备未完成：{exc}', file=sys.stderr, flush=True)
         return 1
+    finally:
+        setup_lock.close()
 
 
 if __name__ == '__main__':
